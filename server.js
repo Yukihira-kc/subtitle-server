@@ -1,9 +1,13 @@
 const express = require('express');
+const path = require('path');
 const http = require('http');
 const {Server} = require('socket.io');
 const app = express();
 const server = http.createServer(app);
-app.get('/', (req,res)=>res.json({ok:true,version:'v24'}));
+if(process.env.LOCAL_TEST_FRONTEND==='1'){
+  app.use('/test',express.static(path.resolve(__dirname,'../frontend')));
+}
+app.get('/', (req,res)=>res.json({ok:true,version:'v27'}));
 const Pagination=require('./pagination.js');
 const io=new Server(server,{cors:{origin:'*'}});
 const order=['A','B','C'], inputs={A:'',B:'',C:''};
@@ -33,7 +37,8 @@ function removeSocketFromRole(socket){
   broadcastPresence();
 }
 const session=Date.now().toString(36),raw=[],history=[],requests=new Map();
-let settings={columns:20,mode:'page',keyColor:'#00ff00',fontSize:32,lineCount:2};
+let settings={columns:20,mode:'page',keyColor:'#00ff00',fontSize:32,lineCount:2,captionFont:'noto-sans-jp',textColor:'#ffffff',outline:true,fontWeight:'normal'};
+let throughMode=false;
 let display={lines:[],id:0};
 let displayItem=null,displayStartedAt=0,displayTimer=null;
 const waiting=[];
@@ -70,6 +75,12 @@ function showQueued(){
   io.emit('caption',display);queueState();
   if(waiting.length)showQueued();
 }
+function enqueueCaption(lines){
+  const pages=Pagination.pages(lines,settings.columns,settings.lineCount);
+  const items=pages.map(lines=>({id:++seq,lines,columns:settings.columns,lineCount:settings.lineCount,at:Date.now()}));
+  waiting.push(...items);queueState();showQueued();
+  return items;
+}
 function clearCurrent(){
   if(displayTimer){clearTimeout(displayTimer);displayTimer=null;}
   waiting.length=0;finishCurrent();display={id:++seq,lines:[]};displayStartedAt=0;io.emit('caption',display);queueState();showQueued();
@@ -79,7 +90,7 @@ function state(){io.emit('presence',presence());io.emit('active',active);}
 function next(after){const p=presence(),start=order.indexOf(after);return [1,2,3].map(n=>order[(start+n+3)%3]).find(k=>p[k])||null;}
 function snapshot(s){s.emit('settings',settings);s.emit('caption',display);}
 io.on('connection',s=>{
-  snapshot(s);s.emit('version','v24');s.emit('presence',getPresence());s.emit('active',active);
+  snapshot(s);s.emit('version','v27');s.emit('presence',getPresence());s.emit('active',active);
   s.on('joinOutput',()=>{outputs.add(s.id);if(authority()!==displayAuthority)resetClock();else s.emit('caption',display);});
   s.on('captionPresented',({id,visible}={})=>{
     if(s.id!==authority()||!displayItem||id!==display.id)return;
@@ -99,14 +110,14 @@ io.on('connection',s=>{
   s.on('send',({key,text}={})=>{
     if(key!==s.data.role||key!==active)return;
     const item={id:++seq,key,text:String(text||''),at:Date.now()};raw.push(item);inputs[key]='';
-    io.emit('log',item);io.to('reviewers').emit('reviewItem',item);io.emit('typing',{key,value:''});
+    io.emit('log',item);io.to('reviewers').emit('reviewItem',item);if(throughMode)enqueueCaption([item.text]);io.emit('typing',{key,value:''});
     const following=findNextConnected(currentIndex);
     active=following?following.role:null;if(following)currentIndex=following.index;state();
   });
   s.on('joinReviewer',(_,ack)=>{
     if(s.data.role||reviewer&&reviewer!==s.id){if(typeof ack==='function')ack({ok:false,error:'校閲者は既に接続中です'});return;}
     reviewer=s.id;s.join('reviewers');if(authority()!==displayAuthority)resetClock();
-    if(typeof ack==='function')ack({ok:true,session,raw,history,waiting:waiting.slice(),display,settings,inputs,presence:presence(),active});
+    if(typeof ack==='function')ack({ok:true,session,raw,history,waiting:waiting.slice(),display,settings,inputs,presence:presence(),active,throughMode});
   });
   s.on('setSettings',(change={},ack)=>{
     if(s.id!==reviewer){if(typeof ack==='function')ack({ok:false});return;}
@@ -114,9 +125,18 @@ io.on('connection',s=>{
     if(Number.isInteger(change.columns)&&change.columns>=10&&change.columns<=40)settings.columns=change.columns;
     if(Number.isInteger(change.lineCount)&&change.lineCount>=1&&change.lineCount<=5)settings.lineCount=change.lineCount;
     if(Number.isInteger(change.fontSize)&&change.fontSize>=16&&change.fontSize<=64)settings.fontSize=change.fontSize;
+    if(['noto-sans-jp','noto-serif-jp'].includes(change.captionFont))settings.captionFont=change.captionFont;
+    if(/^#[0-9a-f]{6}$/i.test(change.textColor||''))settings.textColor=change.textColor;
+    if(typeof change.outline==='boolean')settings.outline=change.outline;
+    if(['normal','bold'].includes(change.fontWeight))settings.fontWeight=change.fontWeight;
     if(['page','scroll'].includes(change.mode))settings.mode=change.mode;
     if(/^#[0-9a-f]{6}$/i.test(change.keyColor||''))settings.keyColor=change.keyColor;
     io.emit('settings',settings);if(typeof ack==='function')ack({ok:true});
+  });
+  s.on('setThroughMode',({enabled}={},ack)=>{
+    if(s.id!==reviewer){if(typeof ack==='function')ack({ok:false,error:'校閲者として未接続です'});return;}
+    throughMode=enabled===true;io.emit('throughMode',throughMode);
+    if(typeof ack==='function')ack({ok:true,enabled:throughMode});
   });
   s.on('captionAction',(request,ack)=>{
     const reply=x=>{if(typeof ack==='function')ack(x);};
@@ -130,9 +150,8 @@ io.on('connection',s=>{
     }
     else if(request.kind==='send') {
       if(!Array.isArray(request.lines)||request.lines.length<1||request.lines.length>2||request.lines.some(x=>typeof x!=='string'||x.length>10000))return reply({ok:false,error:'送出内容が不正です'});
-      const pages=Pagination.pages(request.lines,settings.columns,settings.lineCount);
-      const items=pages.map(lines=>({id:++seq,lines,columns:settings.columns,lineCount:settings.lineCount,at:Date.now()}));
-      resultId=items[0].id;waiting.push(...items);queueState();showQueued();
+      const items=enqueueCaption(request.lines);
+      resultId=items[0].id;
     }
     else return reply({ok:false,error:'送出操作が不正です'});
     const result={ok:true,id:resultId,queued:request.kind!=='out'};requests.set(request.id,result);reply(result);
@@ -140,4 +159,4 @@ io.on('connection',s=>{
   s.on('disconnect',()=>{outputs.delete(s.id);if(reviewer===s.id)reviewer=null;if(authority()!==displayAuthority)resetClock();removeSocketFromRole(s);});
 });
 const PORT=Number(process.env.PORT)||3001;
-server.listen(PORT,'0.0.0.0',()=>console.log('subtitle server v24 on port '+PORT));
+server.listen(PORT,'0.0.0.0',()=>console.log('subtitle server v27 on port '+PORT));
