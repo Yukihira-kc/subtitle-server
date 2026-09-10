@@ -41,7 +41,7 @@ function acknowledge(socket, event, data) {
   await Promise.all([once(reviewer, 'connect'), once(operator, 'connect')]);
 
   const joined = await acknowledge(reviewer, 'joinReviewer', {});
-  if (!joined.ok || joined.settings.columns !== 20 || joined.throughMode !== false) {
+  if (!joined.ok || joined.settings.columns !== 15 || joined.throughMode !== false) {
     throw new Error('校閲接続時の初期状態が不正です。');
   }
 
@@ -64,12 +64,18 @@ function acknowledge(socket, event, data) {
 
   operator.emit('register', { key: 'A' });
   await once(operator, 'active');
-  const queueChanged = once(reviewer, 'captionQueue');
+  const reviewThrough = once(reviewer, 'reviewItem');
   operator.emit('send', { key: 'A', text: 'スルーモード確認' });
-  const waiting = await queueChanged;
-  if (!waiting.length || waiting[0].lines.join('') !== 'スルーモード確認' || waiting[0].columns !== 15) {
-    throw new Error('スルーモードの送信待機追加が不正です。');
-  }
+  const throughItem = await reviewThrough;
+  if (throughItem.text !== 'スルーモード確認') throw new Error('スルー中の原稿が校閲へ届きません。');
+  const before = await acknowledge(reviewer, 'joinReviewer', {});
+  if (before.waiting.length || before.display.lines.length) throw new Error('校閲を経由せず字幕が送出されました。');
+  const request = { id: 'through-test-1', kind: 'send', lines: [throughItem.text] };
+  const sent = await acknowledge(reviewer, 'captionAction', request);
+  const duplicate = await acknowledge(reviewer, 'captionAction', request);
+  if (!sent.ok || duplicate.id !== sent.id) throw new Error('受付確認または重複防止が不正です。');
+  const after = await acknowledge(reviewer, 'joinReviewer', {});
+  if (after.waiting.length || after.display.lines.join('') !== throughItem.text) throw new Error('校閲経由の送出が不正です。');
 
   const off = await acknowledge(reviewer, 'setThroughMode', { enabled: false });
   if (!off.ok || off.enabled !== false) throw new Error('スルーモードをOFFにできませんでした。');
@@ -81,5 +87,5 @@ function acknowledge(socket, event, data) {
   reviewer.close();
   operator.close();
   server.kill();
-  console.log('v27 integration test passed');
+  console.log('v28 integration test passed');
 })().catch(fail);

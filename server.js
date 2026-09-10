@@ -7,7 +7,7 @@ const server = http.createServer(app);
 if(process.env.LOCAL_TEST_FRONTEND==='1'){
   app.use('/test',express.static(path.resolve(__dirname,'../frontend')));
 }
-app.get('/', (req,res)=>res.json({ok:true,version:'v27'}));
+app.get('/', (req,res)=>res.json({ok:true,version:'v28'}));
 const Pagination=require('./pagination.js');
 const io=new Server(server,{cors:{origin:'*'}});
 const order=['A','B','C'], inputs={A:'',B:'',C:''};
@@ -37,7 +37,7 @@ function removeSocketFromRole(socket){
   broadcastPresence();
 }
 const session=Date.now().toString(36),raw=[],history=[],requests=new Map();
-let settings={columns:20,mode:'page',keyColor:'#00ff00',fontSize:32,lineCount:2,captionFont:'noto-sans-jp',textColor:'#ffffff',outline:true,fontWeight:'normal'};
+let settings={columns:15,mode:'page',keyColor:'#00ff00',fontSize:32,lineCount:2,captionFont:'noto-sans-jp',textColor:'#ffffff',outline:true,fontWeight:'normal'};
 let throughMode=false;
 let display={lines:[],id:0};
 let displayItem=null,displayStartedAt=0,displayTimer=null;
@@ -90,7 +90,7 @@ function state(){io.emit('presence',presence());io.emit('active',active);}
 function next(after){const p=presence(),start=order.indexOf(after);return [1,2,3].map(n=>order[(start+n+3)%3]).find(k=>p[k])||null;}
 function snapshot(s){s.emit('settings',settings);s.emit('caption',display);}
 io.on('connection',s=>{
-  snapshot(s);s.emit('version','v27');s.emit('presence',getPresence());s.emit('active',active);
+  snapshot(s);s.emit('version','v28');s.emit('presence',getPresence());s.emit('active',active);
   s.on('joinOutput',()=>{outputs.add(s.id);if(authority()!==displayAuthority)resetClock();else s.emit('caption',display);});
   s.on('captionPresented',({id,visible}={})=>{
     if(s.id!==authority()||!displayItem||id!==display.id)return;
@@ -110,7 +110,7 @@ io.on('connection',s=>{
   s.on('send',({key,text}={})=>{
     if(key!==s.data.role||key!==active)return;
     const item={id:++seq,key,text:String(text||''),at:Date.now()};raw.push(item);inputs[key]='';
-    io.emit('log',item);io.to('reviewers').emit('reviewItem',item);if(throughMode)enqueueCaption([item.text]);io.emit('typing',{key,value:''});
+    io.emit('log',item);io.to('reviewers').emit('reviewItem',item);io.emit('typing',{key,value:''});
     const following=findNextConnected(currentIndex);
     active=following?following.role:null;if(following)currentIndex=following.index;state();
   });
@@ -159,4 +159,4 @@ io.on('connection',s=>{
   s.on('disconnect',()=>{outputs.delete(s.id);if(reviewer===s.id)reviewer=null;if(authority()!==displayAuthority)resetClock();removeSocketFromRole(s);});
 });
 const PORT=Number(process.env.PORT)||3001;
-server.listen(PORT,'0.0.0.0',()=>console.log('subtitle server v27 on port '+PORT));
+server.listen(PORT,'0.0.0.0',()=>console.log('subtitle server v28 on port '+PORT));
