@@ -87,5 +87,5 @@ function acknowledge(socket, event, data) {
   reviewer.close();
   operator.close();
   server.kill();
-  console.log('v28 integration test passed');
+  console.log('v29 legacy practice regression passed');
 })().catch(fail);

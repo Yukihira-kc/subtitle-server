@@ -1,10 +1,10 @@
 {
   "name": "subtitle-server",
-  "version": "28.0.0",
+  "version": "29.0.0",
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js",
+    "test": "node test.js && node test-rooms.js",
     "test:server": "node test-server.js"
   },
   "engines": {
