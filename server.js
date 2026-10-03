@@ -7,7 +7,7 @@ const server = http.createServer(app);
 if(process.env.LOCAL_TEST_FRONTEND==='1'){
   app.use('/test',express.static(path.resolve(__dirname,'../subtitle-ui')));
 }
-app.get('/', (req,res)=>res.json({ok:true,version:'v29'}));
+app.get('/', (req,res)=>res.json({ok:true,version:'v29.5'}));
 const Pagination=require('./pagination.js');
 const io=new Server(server,{cors:{origin:'*'}});
 function createRoomRuntime(roomId){
@@ -94,12 +94,12 @@ function state(){broadcast().emit('presence',presence());broadcast().emit('activ
 function next(after){const p=presence(),start=order.indexOf(after);return [1,2,3].map(n=>order[(start+n+3)%3]).find(k=>p[k])||null;}
 function snapshot(s){s.emit('settings',settings);s.emit('caption',display);}
 function connect(s){
-  snapshot(s);s.emit('version','v29');s.emit('presence',getPresence());s.emit('active',active);
+  snapshot(s);s.emit('version','v29.5');s.emit('presence',getPresence());s.emit('active',active);
   s.on('joinOutput',()=>{outputs.add(s.id);if(authority()!==displayAuthority)resetClock();else s.emit('caption',display);});
   s.on('captionPresented',({id,visible}={})=>{
     if(s.id!==authority()||!displayItem||id!==display.id)return;
     if(!visible){if(displayTimer)clearTimeout(displayTimer);displayTimer=null;displayStartedAt=0;return;}
-    if(!displayStartedAt){displayItem.presented=true;displayStartedAt=Date.now();showQueued();}
+    if(!displayStartedAt){displayItem.presented=true;io.to(reviewChannel).emit('captionLogged',displayItem);displayStartedAt=Date.now();showQueued();}
   });
   s.on('register',({key}={})=>{
     if(!order.includes(key))return;
@@ -121,7 +121,7 @@ function connect(s){
   s.on('joinReviewer',(_,ack)=>{
     if(s.data.role||reviewer&&reviewer!==s.id){if(typeof ack==='function')ack({ok:false,error:'校閲者は既に接続中です'});return;}
     reviewer=s.id;s.join(reviewChannel);if(authority()!==displayAuthority)resetClock();
-    if(typeof ack==='function')ack({ok:true,session,raw,history,waiting:waiting.slice(),display,settings,inputs,presence:presence(),active,throughMode,columnsInitialized});
+    if(typeof ack==='function')ack({ok:true,session,raw,history,presentedCaption:displayItem?.presented?displayItem:null,waiting:waiting.slice(),display,settings,inputs,presence:presence(),active,throughMode,columnsInitialized});
   });
   s.on('setSettings',(change={},ack)=>{
     if(s.id!==reviewer){if(typeof ack==='function')ack({ok:false});return;}
