@@ -14,11 +14,11 @@ async function denied(id,token){const s=io(url,{forceNew:true,transports:['webso
 (async()=>{try{
  await start();
  let list=await api('/rooms');assert.equal(list.rooms.length,1);assert.equal(list.rooms[0].name,'練習用');assert.equal((await api('/rooms/practice/join','POST',{})).status,200);
- const A=await api('/rooms','POST',{name:'案件A',password:'pass-A'}),B=await api('/rooms','POST',{name:'案件B',password:'pass-B'});assert.equal(A.status,201);assert.equal(B.status,201);
- assert.equal((await api('/rooms','POST',{name:'案件A',password:'pass-A'})).status,409);
- assert.equal((await api('/rooms','POST',{name:'練習用',password:'pass-A'})).status,400);
+ const A=await api('/rooms','POST',{name:'案件A',password:'0123'}),B=await api('/rooms','POST',{name:'案件B',password:'4567'});assert.equal(A.status,201);assert.equal(B.status,201);
+ assert.equal((await api('/rooms','POST',{name:'案件A',password:'0123'})).status,409);
+ assert.equal((await api('/rooms','POST',{name:'練習用',password:'0123'})).status,400);
  assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'wrong'})).status,401);
- assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'pass-A'})).status,200);
+ assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'0123'})).status,200);
  await denied(A.room.id);await denied(A.room.id,B.token);await denied('unknown');
  const ra=await connect(A.room.id,A.token),rb=await connect(B.room.id,B.token),rp=await connect('practice');
  for(const r of [ra,rb,rp])assert.equal((await ack(r,'joinReviewer',{})).ok,true);
@@ -41,15 +41,15 @@ async function denied(id,token){const s=io(url,{forceNew:true,transports:['webso
  const out=await connect(A.room.id,A.token);out.emit('joinOutput');await wait(30);out.emit('captionPresented',{id:sa.display.id,visible:true});await wait(2100);sa=await ack(ra,'joinReviewer',{});assert.equal(sa.display.lines[0],'次の字幕');assert.equal(sa.history[0].lines[0],'字幕A');
  assert.equal((await ack(rb,'joinReviewer',{})).display.lines[0],'字幕B');
  assert.equal((await api('/rooms/'+A.room.id,'DELETE',undefined,B.token)).status,403);assert.equal((await api('/rooms/practice','DELETE',undefined,A.token)).status,403);
- assert.equal((await api('/rooms/'+A.room.id+'/password','PATCH',{password:'new-pass'},B.token)).status,403);
- const disconnected=event(ra,'disconnect');const changed=await api('/rooms/'+A.room.id+'/password','PATCH',{password:'new-pass'},A.token);assert.equal(changed.status,200);await disconnected;await denied(A.room.id,A.token);
- assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'pass-A'})).status,401);assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'new-pass'})).status,200);
+ assert.equal((await api('/rooms/'+A.room.id+'/password','PATCH',{password:'8901'},B.token)).status,403);
+ const disconnected=event(ra,'disconnect');const changed=await api('/rooms/'+A.room.id+'/password','PATCH',{password:'8901'},A.token);assert.equal(changed.status,200);await disconnected;await denied(A.room.id,A.token);
+ assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'0123'})).status,401);assert.equal((await api('/rooms/'+A.room.id+'/join','POST',{password:'8901'})).status,200);
  const again=await connect(A.room.id,changed.token);sa=await ack(again,'joinReviewer',{});assert.equal(sa.settings.columns,27);assert.equal(sa.raw.length,1);
- const disk=fs.readFileSync(store,'utf8');assert(!disk.includes('new-pass'));assert(!disk.includes('pass-B'));assert(!disk.includes(A.token));assert(!JSON.stringify((await api('/rooms')).rooms).includes('hash'));
+ const disk=fs.readFileSync(store,'utf8');assert(JSON.parse(disk).every(room=>!Object.hasOwn(room,'password')));assert(!disk.includes(A.token));assert(!JSON.stringify((await api('/rooms')).rooms).includes('hash'));
  await stop();await start();assert.equal((await api('/rooms')).rooms.length,3);await denied(A.room.id,changed.token);
- const login=await api('/rooms/'+A.room.id+'/join','POST',{password:'new-pass'});assert.equal(login.status,200);
+ const login=await api('/rooms/'+A.room.id+'/join','POST',{password:'8901'});assert.equal(login.status,200);
  const reboot=await connect(A.room.id,login.token);assert.equal((await ack(reboot,'joinReviewer',{})).raw.length,0);
  assert.equal((await api('/rooms/'+A.room.id,'DELETE',undefined,login.token)).status,200);await denied(A.room.id,login.token);assert.equal((await api('/rooms')).rooms.length,2);
- for(let i=0;i<21;i++)await api('/rooms/'+B.room.id+'/join','POST',{password:'wrong'});assert.equal((await api('/rooms/'+B.room.id+'/join','POST',{password:'pass-B'})).status,429);
+ for(let i=0;i<21;i++)await api('/rooms/'+B.room.id+'/join','POST',{password:'wrong'});assert.equal((await api('/rooms/'+B.room.id+'/join','POST',{password:'4567'})).status,429);
  console.log('PASS rooms: create/list, public practice, hashed credentials, access denial, all-event isolation, per-room roles/settings/queues/history/IDs, output clock, rotation/revocation, restart, delete, rate limit');
  }finally{await stop();fs.rmSync(dir,{recursive:true,force:true});}})().catch(e=>{console.error(e);process.exitCode=1;});

@@ -11,7 +11,7 @@ module.exports = function installRooms(app, io, createRuntime) {
   const rooms = new Map(), tokens = new Map(), limits = new Map();
   const TOKEN_MS = 7 * 24 * 60 * 60 * 1000;
   let hashJobs = 0, creating = 0;
-  function publicRoom(room) { return {id:room.id,name:room.name,practice:room.id==='practice',protected:room.id!=='practice'}; }
+  function publicRoom(room) { return {id:room.id,name:room.name,practice:room.id==='practice',protected:room.id!=='practice',pin4:!!room.pin4}; }
   function add(def) { const room={...def};room.runtime=createRuntime(room.id);rooms.set(room.id,room);return room; }
   add({id:'practice',name:'練習用',generation:0});
   if (fs.existsSync(file)) {
@@ -23,7 +23,7 @@ module.exports = function installRooms(app, io, createRuntime) {
     }
   }
   function persist() {
-    const definitions=[...rooms.values()].filter(r=>r.id!=='practice').map(({id,name,salt,hash,generation})=>({id,name,salt,hash,generation}));
+    const definitions=[...rooms.values()].filter(r=>r.id!=='practice').map(({id,name,salt,hash,generation,pin4})=>({id,name,salt,hash,generation,pin4:!!pin4}));
     fs.mkdirSync(path.dirname(file),{recursive:true,mode:0o700});
     const temp=file+'.tmp';
     fs.writeFileSync(temp,JSON.stringify(definitions),{mode:0o600});fs.renameSync(temp,file);
@@ -42,7 +42,8 @@ module.exports = function installRooms(app, io, createRuntime) {
     if(hashJobs>=8){const e=new Error('混み合っています。少し待って再試行してください。');e.status=429;throw e;}
     hashJobs++;try{return Buffer.from(await scrypt(password,salt,32)).toString('hex');}finally{hashJobs--;}
   }
-  function validPassword(value) {return typeof value==='string'&&value.length>=4&&value.length<=128;}
+  function normalizePassword(value) {return typeof value==='string'?value.replace(/[０-９]/g,ch=>String.fromCharCode(ch.charCodeAt(0)-0xfee0)):value;}
+  function validPassword(value) {return typeof value==='string'&&/^[0-9]{4}$/.test(value);}
   function bearer(req) {return (req.get('authorization')||'').replace(/^Bearer /,'');}
   function revoke(room) {
     for(const [token,s] of tokens)if(s.roomId===room.id)tokens.delete(token);
@@ -65,8 +66,8 @@ module.exports = function installRooms(app, io, createRuntime) {
   app.get('/api/rooms/:id',(req,res)=>{const room=rooms.get(req.params.id);if(!room)return res.status(404).json({error:'ルームがありません。'});res.json({room:publicRoom(room)});});
   app.post('/api/rooms',endpoint(async(req,res)=>{
     const name=typeof req.body?.name==='string'?req.body.name.trim():'';
-    const password=req.body?.password;
-    if(!name||name.length>80||name==='練習用'||!validPassword(password))return res.status(400).json({error:'案件名は1〜80文字、パスワードは4〜128文字で入力してください。「練習用」は常設ルーム名です。'});
+    const password=normalizePassword(req.body?.password);
+    if(!name||name.length>80||name==='練習用'||!validPassword(password))return res.status(400).json({error:'案件名は1〜80文字、パスワードは数字4桁で入力してください。「練習用」は常設ルーム名です。'});
     if([...rooms.values()].some(r=>r.name===name))return res.status(409).json({error:'同じ案件名のルームがあります。別の名前を付けてください。'});
     if(rooms.size+creating>=101)return res.status(409).json({error:'案件ルームは100件までです。終了したルームを削除してください。'});
     if(limited('create:'+req.ip,10,3600000))return res.status(429).json({error:'作成が続いています。時間をおいて再試行してください。'});
@@ -74,7 +75,7 @@ module.exports = function installRooms(app, io, createRuntime) {
     try {
       const salt=crypto.randomBytes(16).toString('hex'),hash=await digest(password,salt);
       if([...rooms.values()].some(r=>r.name===name))return res.status(409).json({error:'同じ案件名のルームがあります。'});
-      const room=add({id:crypto.randomUUID(),name,salt,hash,generation:1});
+      const room=add({id:crypto.randomUUID(),name,salt,hash,generation:1,pin4:true});
       try{persist();}catch(e){rooms.delete(room.id);room.runtime.dispose();throw e;}
       res.status(201).json({room:publicRoom(room),token:issue(room)});
     } finally {creating--;}
@@ -85,17 +86,19 @@ module.exports = function installRooms(app, io, createRuntime) {
     if(authorized(room,bearer(req)))return res.json({room:publicRoom(room),token:bearer(req)});
     if(limited('join:'+req.ip+':'+room.id,20,600000))return res.status(429).json({error:'認証が続けて失敗しています。10分ほど待って再試行してください。'});
     const generation=room.generation;
-    const password=req.body?.password;
-    if(!validPassword(password)||!crypto.timingSafeEqual(Buffer.from(await digest(password,room.salt),'hex'),Buffer.from(room.hash,'hex')))return res.status(401).json({error:'パスワードが違います。'});
+    const password=normalizePassword(req.body?.password);
+    const candidate=room.pin4?password:req.body?.password;
+    if(!(room.pin4?validPassword(candidate):typeof candidate==='string'&&candidate.length>=4&&candidate.length<=128)||!crypto.timingSafeEqual(Buffer.from(await digest(candidate,room.salt),'hex'),Buffer.from(room.hash,'hex')))return res.status(401).json({error:'パスワードが違います。'});
     if(rooms.get(room.id)!==room||room.generation!==generation)return res.status(409).json({error:'ルームの設定が変わりました。再度入室してください。'});
     res.json({room:publicRoom(room),token:issue(room)});
   }));
   app.patch('/api/rooms/:id/password',endpoint(async(req,res)=>{
     const room=requireRoom(req,res);if(!room)return;
-    if(!validPassword(req.body?.password))return res.status(400).json({error:'パスワードは4〜128文字で入力してください。'});
-    const generation=room.generation,salt=crypto.randomBytes(16).toString('hex'),hash=await digest(req.body.password,salt);
+    const password=normalizePassword(req.body?.password);
+    if(!validPassword(password))return res.status(400).json({error:'パスワードは数字4桁で入力してください。'});
+    const generation=room.generation,salt=crypto.randomBytes(16).toString('hex'),hash=await digest(password,salt);
     if(rooms.get(room.id)!==room||generation!==room.generation||!authorized(room,bearer(req)))return res.status(409).json({error:'ルームの設定が変わりました。再度入室してください。'});
-    const old={salt:room.salt,hash:room.hash,generation:room.generation};Object.assign(room,{salt,hash,generation:generation+1});
+    const old={salt:room.salt,hash:room.hash,generation:room.generation,pin4:room.pin4};Object.assign(room,{salt,hash,generation:generation+1,pin4:true});
     try{persist();}catch(e){Object.assign(room,old);throw e;}
     revoke(room);res.json({room:publicRoom(room),token:issue(room)});
   }));
