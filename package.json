@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node test.js && node test-rooms.js",
+    "test": "node test.js && node test-rooms.js && node test-operator-reconnect.js",
     "test:server": "node test-server.js"
   },
   "engines": {

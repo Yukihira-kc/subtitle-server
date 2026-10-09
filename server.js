@@ -17,6 +17,7 @@ let columnsInitialized=false;
 const order=['A','B','C'], inputs={A:'',B:'',C:''};
 let active=null,reviewer=null,seq=0;
 let currentIndex=0;
+const roleOwners={A:null,B:null,C:null};
 const roleSockets={A:new Set(),B:new Set(),C:new Set()};
 function isRoleConnected(role){return roleSockets[role].size>0;}
 function getPresence(){return {A:isRoleConnected('A'),B:isRoleConnected('B'),C:isRoleConnected('C')};}
@@ -101,14 +102,20 @@ function connect(s){
     if(!visible){if(displayTimer)clearTimeout(displayTimer);displayTimer=null;displayStartedAt=0;return;}
     if(!displayStartedAt){displayItem.presented=true;io.to(reviewChannel).emit('captionLogged',displayItem);displayStartedAt=Date.now();showQueued();}
   });
-  s.on('register',({key}={})=>{
+  s.on('register',({key,operatorId}={},ack)=>{
     if(!order.includes(key))return;
     if(s.id===reviewer)return;
-    if([...roleSockets[key]].some(id=>id!==s.id)){s.emit('roleError','この担当は接続中です');return;}
+    const sameOperator=typeof operatorId==='string'&&operatorId.length<=80&&roleOwners[key]===operatorId;
+    if([...roleSockets[key]].some(id=>id!==s.id)){
+      if(!sameOperator){s.emit('roleError','この担当は接続中です');return;}
+      for(const id of [...roleSockets[key]])if(id!==s.id){const previous=io.sockets.sockets.get(id);if(previous){previous.data.role=null;previous.disconnect(true);}roleSockets[key].delete(id);}
+    }
+    roleOwners[key]=typeof operatorId==='string'&&operatorId.length<=80?operatorId:null;
     if(s.data.role&&s.data.role!==key)removeSocketFromRole(s);
     s.data.role=key;roleSockets[key].add(s.id);
     if(!active||!isRoleConnected(active)){active=key;currentIndex=order.indexOf(key);}
     state();Object.entries(inputs).forEach(([key,value])=>s.emit('typing',{key,value}));
+    s.emit('operatorSnapshot',{session,raw:raw.slice()});if(typeof ack==='function')ack({ok:true});
   });
   s.on('typing',({key,value}={})=>{if(key!==s.data.role||!order.includes(key))return;inputs[key]=String(value||'');s.to(channel).emit('typing',{key,value:inputs[key]});});
   s.on('send',({key,text}={})=>{
