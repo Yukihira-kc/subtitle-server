@@ -41,13 +41,17 @@ class NoRedirect(HTTPRedirectHandler):
 opener = build_opener(NoRedirect())
 
 
+class RequestFailed(Exception):
+    pass
+
+
 def request(url, operation, *, headers=None, data=None, timeout=30, method=None):
     try:
         return opener.open(Request(url, data=data, headers=headers or {}, method=method), timeout=timeout)
     except HTTPError as error:
-        raise SystemExit(f"{operation}: HTTP {error.code}") from None
+        raise RequestFailed(f"{operation}: HTTP {error.code}") from None
     except (TimeoutError, URLError, ConnectionError) as error:
-        raise SystemExit(f"{operation}: {type(error).__name__}") from None
+        raise RequestFailed(f"{operation}: {type(error).__name__}") from None
 
 
 def oidc_assertion():
@@ -165,12 +169,18 @@ def main():
         elif not public_ready:
             raise SystemExit("Standby package is current but the live assets do not match")
     for _ in range(20):
-        if read_public_release():
-            print("The manual Azure standby serves the reviewed release.", flush=True)
-            return
+        try:
+            if read_public_release():
+                print("The manual Azure standby serves the reviewed release.", flush=True)
+                return
+        except RequestFailed:
+            pass  # The public endpoint can be briefly unavailable during a restart.
         time.sleep(6)
     raise SystemExit("Azure accepted the deployment but the live assets were not updated")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RequestFailed as error:
+        raise SystemExit(str(error)) from None
