@@ -2,6 +2,7 @@
 """Patch the reviewer release into a private Kudu wwwroot ZIP without extracting it."""
 
 import argparse
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 from hashlib import sha256
 import json
@@ -188,7 +189,7 @@ def changes_for(archive, members, release):
     return {name:data for name, data in desired.items() if observed.get(name) != data}
 
 
-def output_metadata(name, original):
+def output_metadata(name, original, changed=False):
     result = ZipInfo(name + ('/' if original and original.is_dir() else ''))
     result.compress_type = ZIP_DEFLATED
     if original:
@@ -198,6 +199,12 @@ def output_metadata(name, original):
     else:
         result.create_system = 3
         result.external_attr = 0o100644 << 16
+    if changed:
+        stamp = datetime.now(timezone.utc).replace(microsecond=0)
+        stamp -= timedelta(seconds=stamp.second % 2)
+        if result.date_time == stamp.timetuple()[:6]:
+            stamp += timedelta(seconds=2)
+        result.date_time = stamp.timetuple()[:6]
     return result
 
 
@@ -217,7 +224,7 @@ def write_zip(archive, members, changes, output, overlay):
                         with archive.open(original) as source, final.open(entry, 'w') as target:
                             copyfileobj(source, target, 256 * 1024)
             for name, data in changes.items():
-                final.writestr(output_metadata(name, members.get(name)), data)
+                final.writestr(output_metadata(name, members.get(name), changed=True), data)
         with ZipFile(temporary) as final:
             if final.testzip() is not None:
                 raise ValidationError('The output package failed its archive validation.')

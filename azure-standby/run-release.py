@@ -21,6 +21,7 @@ LIVE = f"https://{APP}.azurewebsites.net"
 SCM = f"https://{APP}.scm.azurewebsites.net"
 AUDIENCE = "api://AzureADTokenExchange"
 REVIEWER_SHA = "10ece6649d9a687def6afe9893e1c01621e09f6fb3809b8099cefffedbd7acd5"
+REVIEWER_PAGE_SHA = "f94d043b8e61fca1683b447c51a8bb7bf683ea4b0709169d0369867f49d5e3d2"
 SOURCES = {
     "server.base.js": ("subtitle-server", "69ba1c7fc2fb11981cc23e30eaffee25e6e2fdab", "server.js"),
     "server.release.js": ("subtitle-server", "f83bf99c9048730f909c3bf89462821d0b1e252c", "server.js"),
@@ -104,7 +105,7 @@ def read_public_release():
     with request(f"{LIVE}/reviewer.js?{nonce}", "Reviewer asset") as reply:
         checksum = hashlib.sha256(reply.read()).hexdigest()
     with request(f"{LIVE}/reviewer.html?{nonce}", "Reviewer page") as reply:
-        return checksum == REVIEWER_SHA and b"reviewer.js?v=29.8-handoff" in reply.read()
+        return checksum == REVIEWER_SHA and hashlib.sha256(reply.read()).hexdigest() == REVIEWER_PAGE_SHA
 
 
 def prepare_sources(directory):
@@ -128,7 +129,8 @@ def deploy_package(package, headers):
     status_url = urljoin(SCM, location)
     target = urlsplit(status_url)
     if target.scheme != "https" or target.netloc != urlsplit(SCM).netloc:
-        raise SystemExit("Azure returned an unexpected deployment status URL")
+        print("Azure returned a status URL outside the configured SCM origin; checking the public release.", flush=True)
+        return
     for _ in range(30):
         with request(status_url, "Azure standby deployment status", headers=headers) as reply:
             status = json.load(reply).get("status")
@@ -162,21 +164,23 @@ def main():
              "--sources", str(root / "sources")], check=True,
         )
         if mode == "inspect":
+            if not revised.is_file() and not public_ready:
+                raise SystemExit("Standby package is current but the live assets do not match")
             print("Standby package and release patch verified.", flush=True)
             return
         if revised.is_file():
             deploy_package(revised, headers)
         elif not public_ready:
             raise SystemExit("Standby package is current but the live assets do not match")
-    for _ in range(20):
-        try:
-            if read_public_release():
-                print("The manual Azure standby serves the reviewed release.", flush=True)
-                return
-        except RequestFailed:
-            pass  # The public endpoint can be briefly unavailable during a restart.
-        time.sleep(6)
-    raise SystemExit("Azure accepted the deployment but the live assets were not updated")
+        for _ in range(20):
+            try:
+                if read_public_release():
+                    print("The manual Azure standby serves the reviewed release.", flush=True)
+                    return
+            except RequestFailed:
+                pass  # The public endpoint can be briefly unavailable during a restart.
+            time.sleep(6)
+        raise SystemExit("Azure accepted the deployment but the live assets were not updated")
 
 
 if __name__ == "__main__":
