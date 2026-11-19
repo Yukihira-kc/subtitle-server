@@ -31,7 +31,7 @@
         },
         "parameters": {
           "appName": {
-            "value": "[reference(variables('appId'), '2024-11-01', 'Full').name]"
+            "value": "[last(split(reference(variables('appId'), '2024-11-01', 'Full').id, '/'))]"
           },
           "oidcSubject": {
             "value": "[parameters('oidcSubject')]"
