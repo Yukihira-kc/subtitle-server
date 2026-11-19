@@ -1,0 +1,30 @@
+name: Azure standby release
+
+on:
+  push:
+    branches: [azure-standby-deploy]
+    paths:
+      - .github/workflows/azure-standby-deploy.yml
+      - azure-standby/**
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: azure-standby-jp-release
+  cancel-in-progress: false
+
+jobs:
+  standby:
+    if: github.repository == 'Yukihira-kc/subtitle-server'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Process the reviewed standby release
+        env:
+          AZURE_STANDBY_CONFIG: ${{ secrets.AZURE_STANDBY_CONFIG }}
+        run: python3 azure-standby/run-release.py
