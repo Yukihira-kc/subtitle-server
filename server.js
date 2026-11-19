@@ -9,6 +9,7 @@ if(process.env.LOCAL_TEST_FRONTEND==='1'){
 }
 app.get('/', (req,res)=>res.json({ok:true,version:'v29.5'}));
 const Pagination=require('./pagination.js');
+const createReviewerDraft=require('./reviewer-draft');
 const io=new Server(server,{cors:{origin:'*'}});
 function createRoomRuntime(roomId){
 const channel='room:'+roomId,reviewChannel=channel+':reviewers';
@@ -42,6 +43,7 @@ function removeSocketFromRole(socket){
   broadcastPresence();
 }
 const session=Date.now().toString(36),raw=[],history=[],requests=new Map();
+const reviewerDraft=createReviewerDraft(session,raw);
 let settings={columns:15,mode:'page',keyColor:'#00ff00',fontSize:32,lineCount:2,captionFont:'noto-sans-jp',textColor:'#ffffff',outline:true,fontWeight:'normal'};
 let throughMode=false;
 let display={lines:[],id:0};
@@ -120,15 +122,22 @@ function connect(s){
   s.on('typing',({key,value}={})=>{if(key!==s.data.role||!order.includes(key))return;inputs[key]=String(value||'');s.to(channel).emit('typing',{key,value:inputs[key]});});
   s.on('send',({key,text}={})=>{
     if(key!==s.data.role||key!==active)return;
-    const item={id:++seq,key,text:String(text||''),at:Date.now()};raw.push(item);inputs[key]='';
+    const item={id:++seq,key,text:String(text||''),at:Date.now()};reviewerDraft.append(item);inputs[key]='';
     broadcast().emit('log',item);io.to(reviewChannel).emit('reviewItem',item);broadcast().emit('typing',{key,value:''});
     const following=findNextConnected(currentIndex);
     active=following?following.role:null;if(following)currentIndex=following.index;state();
   });
-  s.on('joinReviewer',(_,ack)=>{
-    if(s.data.role||reviewer&&reviewer!==s.id){if(typeof ack==='function')ack({ok:false,error:'校閲者は既に接続中です'});return;}
+  s.on('joinReviewer',(options,ack)=>{
+    if(s.data.role){if(typeof ack==='function')ack({ok:false,error:'入力担当として接続中です'});return;}
+    if(reviewer&&reviewer!==s.id){if(typeof ack==='function')ack({ok:false,code:'reviewer_busy',error:'校閲者は既に接続中です'});return;}
+    const admission=reviewerDraft.join(options);
+    if(!admission.ok){if(typeof ack==='function')ack(admission);return;}
     reviewer=s.id;s.join(reviewChannel);if(authority()!==displayAuthority)resetClock();
-    if(typeof ack==='function')ack({ok:true,session,raw,history,presentedCaption:displayItem?.presented?displayItem:null,waiting:waiting.slice(),display,settings,inputs,presence:presence(),active,throughMode,columnsInitialized});
+    if(typeof ack==='function')ack({...admission,session,raw,history,presentedCaption:displayItem?.presented?displayItem:null,waiting:waiting.slice(),display,settings,inputs,presence:presence(),active,throughMode,columnsInitialized});
+  });
+  s.on('saveReviewDraft',(draft,ack)=>{
+    const result=s.id===reviewer?reviewerDraft.save(draft):{ok:false,error:'校閲者として未接続です'};
+    if(typeof ack==='function')ack(result);
   });
   s.on('setSettings',(change={},ack)=>{
     if(s.id!==reviewer){if(typeof ack==='function')ack({ok:false});return;}
@@ -154,18 +163,23 @@ function connect(s){
     if(s.id!==reviewer)return reply({ok:false,error:'校閲者として未接続です'});
     if(!request||typeof request.id!=='string')return reply({ok:false,error:'送出IDがありません'});
     if(requests.has(request.id))return reply(requests.get(request.id));
-    let resultId=display.id;
+    let resultId=display.id, revision;
     if(request.kind==='out'){
       clearCurrent();
       resultId=display.id;
     }
     else if(request.kind==='send') {
       if(!Array.isArray(request.lines)||request.lines.length<1||request.lines.length>2||request.lines.some(x=>typeof x!=='string'||x.length>10000))return reply({ok:false,error:'送出内容が不正です'});
+      const accepted=reviewerDraft.send(request);
+      if(!accepted.ok)return reply(accepted);
+      revision=accepted.revision;
       const items=enqueueCaption(request.lines);
       resultId=items[0].id;
     }
     else return reply({ok:false,error:'送出操作が不正です'});
-    const result={ok:true,id:resultId,queued:request.kind!=='out'};requests.set(request.id,result);reply(result);
+    const result={ok:true,id:resultId,queued:request.kind!=='out'};
+    if(revision!==undefined)result.revision=revision;
+    requests.set(request.id,result);reply(result);
   });
   s.on('disconnect',()=>{outputs.delete(s.id);if(reviewer===s.id)reviewer=null;if(authority()!==displayAuthority)resetClock();removeSocketFromRole(s);});
 }
